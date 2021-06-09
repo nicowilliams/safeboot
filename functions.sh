@@ -1,6 +1,4 @@
-#!/bin/sh
-# Note that this is parsed with /bin/sh, not bash, so that
-# it can work with some of the initramfs scripts.
+#!/bin/bash
 #
 # turn off "expressions don't expand in single quotes"
 # and "can't follow non-constant sources"
@@ -10,7 +8,7 @@ export LC_ALL=C
 die_msg=""
 die() { echo "$die_msg""$*" >&2 ; exit 1 ; }
 warn() { echo "$@" >&2 ; }
-debug() { [ "$VERBOSE" = 1 ] && echo "$@" >&2 ; }
+debug() { [[ $VERBOSE = 1 ]] && echo "$@" >&2 ; }
 
 
 ########################################
@@ -23,22 +21,21 @@ debug() { [ "$VERBOSE" = 1 ] && echo "$@" >&2 ; }
 #
 ########################################
 
-TMP=$(mktemp -d)
+TMP=
 TMP_MOUNT=n
 cleanup() {
-	if [ "$TMP_MOUNT" = "y" ]; then
+	if [[ $TMP_MOUNT = "y" ]]; then
 		warn "$TMP: Unmounting"
 		umount "$TMP" || die "DANGER: umount $TMP failed. Secrets might be exposed."
 	fi
-	rm -rf "$TMP"
+	[[ -n $TMP ]] && rm -rf "$TMP"
 }
 
 trap cleanup EXIT
+TMP=$(mktemp -d)
 
 mount_tmp() {
-	mount -t tmpfs none "$TMP" \
-	|| die "Unable to mount temp directory"
-
+	mount -t tmpfs none "$TMP" || die "Unable to mount temp directory"
 	chmod 700 "$TMP"
 	TMP_MOUNT=y
 }
@@ -64,9 +61,7 @@ sha256() { sha256sum - | cut -d' ' -f1 ; }
 PCR_DEFAULT=0000000000000000000000000000000000000000000000000000000000000000
 
 TPM2="$(command -v tpm2 || true)"
-if [ -z "$TPM2" ]; then
-	warn "tpm2 program not found! things will probably break"
-fi
+[[ -z $TPM2 ]] && warn "tpm2 program not found! things will probably break"
 
 # if the TPM2 resource manager is running, talk to it.
 # otherwise use a direct connection to the TPM
@@ -76,7 +71,7 @@ fi
 
 
 tpm2() {
-	if [ "$VERBOSE" = 1 ]; then
+	if [[ "$VERBOSE" = 1 ]]; then
 		/usr/bin/time -f '%E %C' "$TPM2" "$@"
 	else
 		"$TPM2" "$@"
@@ -125,6 +120,17 @@ tpm2_flushall() {
 	|| die "tpm2_flushcontext: unable to flush saved session"
 }
 
+# Don't flush saved sessions.
+tpm2_flushsome() {
+	tpm2 flushcontext \
+		--transient-object \
+	|| die "tpm2_flushcontext: unable to flush transient handles"
+
+	tpm2 flushcontext \
+		--loaded-session \
+	|| die "tpm2_flushcontext: unable to flush sessions"
+}
+
 # Create the TPM policy for sealing/unsealing the disk encryption key
 # If an optional argument is provided, use that for the PCR data
 # If an second optional argument is provided, use that for the version counter file
@@ -132,8 +138,10 @@ tpm2_flushall() {
 # the createauthsession (usually only needed for unsealing)
 tpm2_create_policy()
 {
-	PCR_FILE="$1"
-	if [ -n "$2" ]; then
+	local PCR_FILE="$1"
+	local VERSION
+
+	if (($# > 1)); then
 		VERSION="$2"
 		warn "Using TPM counter $VERSION"
 	else
@@ -166,7 +174,7 @@ tpm2_create_policy()
 		>> /tmp/tpm.log \
 	|| die "Unable to create PCR policy"
 
-	if [ "$SEAL_PIN" = "1" ]; then
+	if [[ $SEAL_PIN = 1 ]]; then
 		# Add an Auth Value policy, which will require the PIN for unsealing
 		tpm2 policyauthvalue \
 			--session "$TMP/session.ctx" \
@@ -184,7 +192,7 @@ tpm2_create_policy()
 		>> /tmp/tpm.log \
 	|| die "Unable to create version policy"
 
-	if [ -n "$TPM_POLICY_SIG" ]; then
+	if [[ -n $TPM_POLICY_SIG ]]; then
 		tpm2 verifysignature \
 			--hash-algorithm sha256 \
 			--scheme rsassa \
@@ -216,7 +224,7 @@ tpm2_create_policy()
 EFIVARDIR="/sys/firmware/efi/efivars"
 
 efivar_setup() {
-	if [ -z "$1" ]; then
+	if [[ -z ${1:-} ]]; then
 		die "efivar: variable name required"
 	fi
 	if ! mount | grep -q "$EFIVARDIR" ; then
@@ -228,7 +236,7 @@ efivar_setup() {
 }
 
 efivar_write() {
-	efivar_setup "$1"
+	efivar_setup "${1:-}"
 	chattr -i "$var"
 
 	echo "07 00 00 00" | hex2bin > "$TMP/efivar.bin"
@@ -240,7 +248,7 @@ efivar_write() {
 }
 
 efivar_read() {
-	efivar_setup "$1"
+	efivar_setup "${1:-}"
 	cat "$var" | tail -c +5
 }
 
@@ -258,7 +266,7 @@ efi_bootnext()
 
 	# Find the recovery entry in the efibootmgr
 	entry=$(efiboot_entry "${TARGET}")
-	if [ -z "$entry" ]; then
+	if [[ -z $entry ]]; then
 		die "${TARGET} boot entry not in efibootmgr?"
 	fi
 
@@ -279,7 +287,7 @@ mount_by_uuid() {
 	fstab="${2:-/etc/fstab}"
 	dev="$(awk "/^[^#]/ { if (\$2 == \"$partition\") print \$1 }" "$fstab" )"
 
-	if [ -z "$dev" ]; then
+	if [[ -z $dev ]]; then
 		warn "$partition: Not found in $fstab"
 		return 0
 	fi
@@ -297,3 +305,85 @@ mount_by_uuid() {
 	esac
 }
 
+# Implement a form of authenticated encryption.
+#
+# OpenSSL really should have a command to do something like this.
+aead_encrypt() {
+	local plaintext_file="$1"
+	local key_file="$2"
+	local ciphertext_file="$3"
+	local iv=$(openssl rand -hex 16)
+	local mackey=$(sha256 < "$key_file")
+
+	openssl enc -aes-128-ctr		\
+		    -e				\
+		    -in "$plaintext_file"	\
+		    -out "$ciphertext_file"	\
+		    -kfile "$key_file"		\
+		    -iv $iv 2>/dev/null
+	rm -f "${ciphertext_file}.mac"
+	# Append the MAC
+	(printf '%s' "$iv" | hex2bin; cat "$ciphertext_file") |
+	  openssl dgst -mac HMAC		\
+		       -macopt hexkey:"$mackey" \
+		       -binary			\
+		       -out "${ciphertext_file}.mac"
+	cat "${ciphertext_file}.mac" >> "${ciphertext_file}"
+
+	# Normally the IV would go first...  But we'll put it last.
+	printf '%s' "$iv" | hex2bin >> "${ciphertext_file}"
+	rm -f "${ciphertext_file}.mac"
+}
+
+# Implement a form of authenticated decryption.
+#
+# OpenSSL really should have a command to do something like this.
+aead_decrypt() {
+	local ciphertext_file="$1"
+	local key_file="$2"
+	local plaintext_file="$3"
+	local mackey=$(sha256 < "$key_file")
+	local iv mac
+	local sz=$(stat -c '%s' "$ciphertext_file")
+
+	# 64 = 32 bytes of MAC + 16 bytes of IV + 16 bytes of magic that
+	# OpenSSL prepends
+	((sz >= 64)) || die "ciphertext file too short"
+
+	# The IV is the last 32 bytes of the file
+	iv=$(dd if="$ciphertext_file"		\
+		skip=$((sz - 16))		\
+		bs=1				\
+		count=16 2>/dev/null		|
+		bin2hex)
+	# The 32 bytes before the IV is the MAC
+	dd if="$ciphertext_file"		\
+	   of="${ciphertext_file}.mac"		\
+	   skip=$((sz - 48))			\
+	   bs=1					\
+	   count=32 2>/dev/null
+	# MAC the ciphertext
+	(
+	 printf '%s' "$iv" | hex2bin
+	 dd if="$ciphertext_file"	\
+	    bs=$((sz - 48))	\
+	    count=1 2>/dev/null
+	) | openssl dgst -mac HMAC			\
+			 -macopt hexkey:"$mackey"	\
+			 -binary			\
+			 -out "${ciphertext_file}.mac2"
+	# Compare to the MAC from the file
+	if cmp "${ciphertext_file}.mac" "${ciphertext_file}.mac2" 2>/dev/null; then
+		# Decrypt the ciphertext
+		dd if="$ciphertext_file"	\
+		   bs=$((sz - 48))		\
+		   count=1 2>/dev/null		|
+		openssl enc -aes-128-ctr				\
+			    -d						\
+			    -out "${plaintext_file}"			\
+			    -kfile "$key_file"				\
+			    -iv "$iv" 2>/dev/null
+	else
+		die "MAC does not match"
+	fi
+}
