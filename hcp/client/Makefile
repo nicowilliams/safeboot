@@ -13,13 +13,30 @@ $(HCP_CLIENT_OUT)/run_client.sh:
 	$Qcp $< $@
 
 HCP_CLIENT_PATHS := $(HCP_CLIENT_OUT)/run_client.sh
+HCP_CLIENT_PATHS += $(HCP_CLIENT_OUT)/install.tar.gz
+$(HCP_CLIENT_OUT)/install.tar.gz: | $(HCP_CLIENT_OUT)
+$(HCP_CLIENT_OUT)/install.tar.gz: $(HCP_SUBMODULES_OUT)/install.tar.gz
+$(HCP_CLIENT_OUT)/install.tar.gz:
+	$Qcp $< $@
 
 # Inject the "SAFEBOOT_SBIN" files. Same comments as for enrollsvc-hcp.
+MDIRS += $(HCP_CLIENT_OUT)/safeboot-initramfs
+MDIRS += $(HCP_CLIENT_OUT)/safeboot-initramfs/scripts
+MDIRS += $(HCP_CLIENT_OUT)/safeboot-initramfs/hooks
+MDIRS += $(HCP_CLIENT_OUT)/safeboot-tests
 MDIRS += $(HCP_CLIENT_OUT)/safeboot-sbin
 MDIRS += $(HCP_CLIENT_OUT)/safeboot-xtra
 $(HCP_CLIENT_OUT)/safeboot-sbin: | $(HCP_CLIENT_OUT)
 $(HCP_CLIENT_OUT)/safeboot-xtra: | $(HCP_CLIENT_OUT)
+$(HCP_CLIENT_OUT)/safeboot-initramfs: | $(HCP_CLIENT_OUT)
+$(HCP_CLIENT_OUT)/safeboot-initramfs/scripts: | $(HCP_CLIENT_OUT)/safeboot-initramfs
+$(HCP_CLIENT_OUT)/safeboot-initramfs/hooks: | $(HCP_CLIENT_OUT)/safeboot-initramfs
+$(HCP_CLIENT_OUT)/safeboot-tests: | $(HCP_CLIENT_OUT)
 
+HCP_CLIENT_SAFEBOOT_INITRAMFS_SCRIPTS := $(shell cd $(TOP)/initramfs/scripts && ls -1)
+HCP_CLIENT_SAFEBOOT_INITRAMFS_HOOKS := $(shell cd $(TOP)/initramfs/hooks && ls -1)
+HCP_CLIENT_SAFEBOOT_INITRAMFS := $(shell cd $(TOP)/initramfs && find . -maxdepth 1 -type f -print)
+HCP_CLIENT_SAFEBOOT_TESTS := $(shell cd $(TOP)/tests && ls -1)
 HCP_CLIENT_SAFEBOOT_SBIN := $(shell cd $(TOP)/sbin && ls -1)
 HCP_CLIENT_SAFEBOOT_XTRA := functions.sh safeboot.conf
 define enrollsvc_safeboot_file
@@ -29,6 +46,10 @@ $(HCP_CLIENT_OUT)/safeboot-$2/$1:
 	$Qcp $$< $$@
 $(eval HCP_CLIENT_PATHS += $(HCP_CLIENT_OUT)/safeboot-$2/$1)
 endef
+$(foreach i,$(HCP_CLIENT_SAFEBOOT_INITRAMFS_SCRIPTS),$(eval $(call enrollsvc_safeboot_file,$i,initramfs/scripts,initramfs/scripts)))
+$(foreach i,$(HCP_CLIENT_SAFEBOOT_INITRAMFS_HOOKS),$(eval $(call enrollsvc_safeboot_file,$i,initramfs/hooks,initramfs/hooks)))
+$(foreach i,$(HCP_CLIENT_SAFEBOOT_INITRAMFS),$(eval $(call enrollsvc_safeboot_file,$i,initramfs,initramfs)))
+$(foreach i,$(HCP_CLIENT_SAFEBOOT_TESTS),$(eval $(call enrollsvc_safeboot_file,$i,tests,tests)))
 $(foreach i,$(HCP_CLIENT_SAFEBOOT_SBIN),$(eval $(call enrollsvc_safeboot_file,$i,sbin,sbin)))
 $(foreach i,$(HCP_CLIENT_SAFEBOOT_XTRA),$(eval $(call enrollsvc_safeboot_file,$i,xtra,.)))
 
