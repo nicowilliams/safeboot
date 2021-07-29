@@ -54,6 +54,8 @@ GENPROGS+=(gentest0)
 ESCROW_PUBS_DIR=${d}/escrowpubs
 POLICIES[rootfskey]=pcr11
 POLICIES[test0]=pcr11
+SIGNING_KEY_PRIV=${d}/sign.priv
+SIGNING_KEY_PUB=${d}/sign.pub
 EOF
 
 policy_pcr11_unext=(tpm2 policypcr '--pcr-list=sha256:11')
@@ -124,12 +126,14 @@ make_client() {
 	echo "Enrolling $1"
 	(
 		(($# == 1)) || unset TPM2TOOLS_TCTI
+		TPM2TOOLS_TCTI="${TCTIs[_self_]}"	\
 		attest-enroll -C "${d}/attest-enroll.conf" "$1" < "${d}/${1}/ek.pub"
 	)
 
 	echo "Checking that PEM also works"
-	if attest-enroll -C "${d}/attest-enroll.conf" "$1" < "${d}/${1}/ek.pem"; then
-		die "Using PEM we got a different TPM2B_PUBLIC!"
+	if TPM2TOOLS_TCTI="${TCTIs[_self_]}"	\
+	   attest-enroll -C "${d}/attest-enroll.conf" "$1" < "${d}/${1}/ek.pem"; then
+		warn "Using PEM we got a different TPM2B_PUBLIC!"
 	fi
 
 	ekpub=$(cat "${d}/db/hostname2ekpub/$1")
@@ -173,8 +177,21 @@ echo "Starting an SWTPM for things that should be software-only (but aren't yet)
 start_swtpm _self_
 export TPM2TOOLS_TCTI="${TCTIs[_self_]}"
 
+tpm2 createprimary --hierarchy o			\
+		   --key-context "${d}/primary.ctx"
+tpm2 create --parent-context "${d}/primary.ctx"		\
+	    --key-context "${d}/sign.ctx"		\
+	    --private "${d}/sign.priv"			\
+	    --public "${d}/sign.pub"			\
+	    --attributes 'sensitivedataorigin|userwithauth|sign'
+tpm2 flushcontext --transient-object
+tpm2 load --private "${d}/sign.priv"			\
+	  --public "${d}/sign.pub"			\
+	  --parent-context "${d}/primary.ctx"		\
+	  --key-context "${d}/signing-key.ctx"
+
 make_escrow BreakGlass
-make_client foo no-tpm
+make_client foo
 make_client bar
 make_client baz
 for i in foo bar baz; do
@@ -254,4 +271,5 @@ for i in foo bar baz; do
 	# Note that only attest-verify needs access to the enrolled clients
 	# attestation database (SAFEBOOT_DB_DIR).
 done
+
 success=true
