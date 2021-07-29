@@ -48,4 +48,4 @@ SAFEBOOT_HCP_BASE?=debian:bullseye-slim
 # These flags get passed to "make" when compiling submodules. "-j" on its own
 # allows make to spawn arbitrarily many processes at once, whereas "-j 4" caps
 # the parallelism to 4.
-SAFEBOOT_HCP_BUILDER_MAKE_PARALLEL := -j 16
+SAFEBOOT_HCP_BUILDER_MAKE_PARALLEL := -j 2
