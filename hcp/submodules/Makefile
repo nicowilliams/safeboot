@@ -69,6 +69,73 @@ $(HCP_SUBMODULES_OUT)/libtpms.installed:
 	$Q$(HCP_SUBMODULES_LIBTPMS_RUN) "cd /libtpms ; make install"
 	$Qtouch $@
 
+############
+# tpm2-tss #
+############
+
+HCP_SUBMODULES_TPM2_TSS_RUN := $(HCP_SUBMODULES_DOCKER_RUN) \
+	-v $(TOP)/tpm2-tss:/tpm2-tss \
+	$(SAFEBOOT_HCP_DSPACE)builder \
+	bash -c
+
+$(HCP_SUBMODULES_OUT)/tpm2-tss.autogened: $(HCP_SUBMODULES_BUILDER_DEP)
+$(HCP_SUBMODULES_OUT)/tpm2-tss.autogened: | $(HCP_SUBMODULES_INSTALL)
+$(HCP_SUBMODULES_OUT)/tpm2-tss.autogened:
+	$Q$(HCP_SUBMODULES_TPM2_TSS_RUN) "cd /tpm2-tss ; ./bootstrap"
+	$Qtouch $@
+
+CMD_TPM2_TSS_CFG := cd /tpm2-tss ; ./configure
+CMD_TPM2_TSS_CFG += --prefix=$(HCP_SUBMODULES_INSTALL_DEST)
+$(HCP_SUBMODULES_OUT)/tpm2-tss.configured: $(HCP_SUBMODULES_OUT)/tpm2-tss.autogened
+$(HCP_SUBMODULES_OUT)/tpm2-tss.configured:
+	$Q$(HCP_SUBMODULES_TPM2_TSS_RUN) "$(CMD_TPM2_TSS_CFG)"
+	$Qtouch $@
+
+CMD_TPM2_TSS_COMPILE := cd /tpm2-tss ; make $(SAFEBOOT_HCP_SUBMODULES_MAKE_PARALLEL)
+$(HCP_SUBMODULES_OUT)/tpm2-tss.compiled: $(HCP_SUBMODULES_OUT)/tpm2-tss.configured
+$(HCP_SUBMODULES_OUT)/tpm2-tss.compiled:
+	$Q$(HCP_SUBMODULES_TPM2_TSS_RUN) "$(CMD_TPM2_TSS_COMPILE)"
+	$Qtouch $@
+
+$(HCP_SUBMODULES_OUT)/tpm2-tss.installed: $(HCP_SUBMODULES_OUT)/tpm2-tss.compiled
+$(HCP_SUBMODULES_OUT)/tpm2-tss.installed:
+	$Q$(HCP_SUBMODULES_TPM2_TSS_RUN) "cd /tpm2-tss ; make install"
+	$Qtouch $@
+
+##############
+# tpm2-tools #
+##############
+
+HCP_SUBMODULES_TPM2_TOOLS_RUN := $(HCP_SUBMODULES_DOCKER_RUN) \
+	-v $(TOP)/tpm2-tools:/tpm2-tools \
+	$(SAFEBOOT_HCP_DSPACE)builder \
+	bash -c
+
+$(HCP_SUBMODULES_OUT)/tpm2-tools.autogened: $(HCP_SUBMODULES_BUILDER_DEP)
+$(HCP_SUBMODULES_OUT)/tpm2-tools.autogened: | $(HCP_SUBMODULES_INSTALL)
+$(HCP_SUBMODULES_OUT)/tpm2-tools.autogened:
+	$Q$(HCP_SUBMODULES_TPM2_TOOLS_RUN) "cd /tpm2-tools ; ./bootstrap"
+	$Qtouch $@
+
+CMD_TPM2_TOOLS_CFG := cd /tpm2-tools ; PKG_CONFIG_PATH=/install/lib/pkgconfig:/usr/lib/pkgconfig ./configure
+CMD_TPM2_TOOLS_CFG += --prefix=$(HCP_SUBMODULES_INSTALL_DEST)
+$(HCP_SUBMODULES_OUT)/tpm2-tools.configured: $(HCP_SUBMODULES_OUT)/tpm2-tools.autogened
+$(HCP_SUBMODULES_OUT)/tpm2-tools.configured: $(HCP_SUBMODULES_OUT)/tpm2-tss.installed
+$(HCP_SUBMODULES_OUT)/tpm2-tools.configured:
+	$Q$(HCP_SUBMODULES_TPM2_TOOLS_RUN) "$(CMD_TPM2_TOOLS_CFG)"
+	$Qtouch $@
+
+CMD_TPM2_TOOLS_COMPILE := cd /tpm2-tools ; make $(SAFEBOOT_HCP_SUBMODULES_MAKE_PARALLEL)
+$(HCP_SUBMODULES_OUT)/tpm2-tools.compiled: $(HCP_SUBMODULES_OUT)/tpm2-tools.configured
+$(HCP_SUBMODULES_OUT)/tpm2-tools.compiled:
+	$Q$(HCP_SUBMODULES_TPM2_TOOLS_RUN) "$(CMD_TPM2_TOOLS_COMPILE)"
+	$Qtouch $@
+
+$(HCP_SUBMODULES_OUT)/tpm2-tools.installed: $(HCP_SUBMODULES_OUT)/tpm2-tools.compiled
+$(HCP_SUBMODULES_OUT)/tpm2-tools.installed:
+	$Q$(HCP_SUBMODULES_TPM2_TOOLS_RUN) "cd /tpm2-tools ; make install"
+	$Qtouch $@
+
 #########
 # swtpm #
 #########
@@ -115,6 +182,8 @@ TGZ_CMD += tar zcf install.tar.gz $(HCP_SUBMODULES_INSTALL_DEST) ;
 TGZ_CMD += chown --reference=swtpm.installed install.tar.gz
 
 $(HCP_SUBMODULES_OUT)/install.tar.gz: $(HCP_SUBMODULES_OUT)/swtpm.installed
+$(HCP_SUBMODULES_OUT)/install.tar.gz: $(HCP_SUBMODULES_OUT)/tpm2-tss.installed
+$(HCP_SUBMODULES_OUT)/install.tar.gz: $(HCP_SUBMODULES_OUT)/tpm2-tools.installed
 $(HCP_SUBMODULES_OUT)/install.tar.gz:
 	$Q$(HCP_SUBMODULES_DOCKER_RUN) \
 		-v $(HCP_SUBMODULES_OUT):/put_it_here \
@@ -160,6 +229,14 @@ ifeq (yes,$(shell stat $(HCP_SUBMODULES_OUT)/libtpms.installed > /dev/null 2>&1 
 	$Q$(HCP_SUBMODULES_LIBTPMS_RUN) "cd /libtpms ; make uninstall"
 	$Qrm $(HCP_SUBMODULES_OUT)/libtpms.installed
 endif
+ifeq (yes,$(shell stat $(HCP_SUBMODULES_OUT)/tpm2-tss.installed > /dev/null 2>&1 && echo yes))
+	$Q$(HCP_SUBMODULES_TPM2_TSS_RUN) "cd /tpm2-tss ; make uninstall"
+	$Qrm $(HCP_SUBMODULES_OUT)/tpm2-tss.installed
+endif
+ifeq (yes,$(shell stat $(HCP_SUBMODULES_OUT)/tpm2-tools.installed > /dev/null 2>&1 && echo yes))
+	$Q$(HCP_SUBMODULES_TPM2_TOOLS_RUN) "cd /tpm2-tools ; make uninstall"
+	$Qrm $(HCP_SUBMODULES_OUT)/tpm2-tools.installed
+endif
 ifeq (yes,$(shell stat $(HCP_SUBMODULES_INSTALL) > /dev/null 2>&1 && echo yes))
 ifneq (,$(SUBMODULES_INSTALLED_FILES))
 ifneq (,$(FORCE))
@@ -181,6 +258,16 @@ ifeq (yes,$(shell stat $(HCP_SUBMODULES_OUT)/libtpms.* > /dev/null 2>&1 && echo 
 	$QUTIL_IMAGE=$(SAFEBOOT_HCP_BASE) \
 		$(ASSIST_CLEANUP) submodule $(TOP)/libtpms autogen.sh
 	$Qrm $(HCP_SUBMODULES_OUT)/libtpms.*
+endif
+ifeq (yes,$(shell stat $(HCP_SUBMODULES_OUT)/tpm2-tss.* > /dev/null 2>&1 && echo yes))
+	$QUTIL_IMAGE=$(SAFEBOOT_HCP_BASE) \
+		$(ASSIST_CLEANUP) submodule $(TOP)/tpm2-tss autogen.sh
+	$Qrm $(HCP_SUBMODULES_OUT)/tpm2-tss.*
+endif
+ifeq (yes,$(shell stat $(HCP_SUBMODULES_OUT)/tpm2-tools.* > /dev/null 2>&1 && echo yes))
+	$QUTIL_IMAGE=$(SAFEBOOT_HCP_BASE) \
+		$(ASSIST_CLEANUP) submodule $(TOP)/tpm2-tools autogen.sh
+	$Qrm $(HCP_SUBMODULES_OUT)/tpm2-tools.*
 endif
 	$Qrmdir $(HCP_SUBMODULES_OUT)
 endif
