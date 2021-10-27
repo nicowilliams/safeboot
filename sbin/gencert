@@ -167,6 +167,7 @@ OpenSSL)
 	openssl req							\
 		-new							\
 		-batch							\
+		-subj '/'						\
 		-key cert-key.pem					\
 		-out cert-req						\
 	|| die "Could not make a CSR"
