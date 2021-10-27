@@ -109,11 +109,13 @@ issuerAltName=issuer:copy
 subjectAltName=critical,@subject_alt_section
 
 [eku_section]
-extendedKeyUsage=1.3.6.1.5.2.3.4
-extendedKeyUsage=1.3.6.1.5.5.7.3.2
+extendedKeyUsage.800=1.3.6.1.5.2.3.4
+extendedKeyUsage.801=1.3.6.1.5.5.7.3.2
 $(
-	((${#GENCERT_EKUS[@]} > 0))				\
-	&& printf 'extendedKeyUsage=%s\n' "${GENCERT_EKUS[@]}"
+	for i in "${!GENCERT_EKUS[@]}"; do
+		printf 'extendedKeyUsage.%s=%s\n'		\
+			"$i" "${GENCERT_EKUS[1]}"
+	done
 )
 
 [subject_alt_section]
