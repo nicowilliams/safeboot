@@ -166,7 +166,7 @@ OpenSSL)
 		-new							\
 		-batch							\
 		-key cert-key.pem					\
-		-out client.req						\
+		-out cert-req						\
 	|| die "Could not make a CSR"
 
 	export GENCERT_REALM
@@ -177,11 +177,11 @@ OpenSSL)
 		-set_serial "0x$(_rand 16 | bin2hex)"			\
 		"${openssl_x509_opts[@]}"				\
 		-req							\
-		-in client.req						\
+		-in cert-req						\
 		-extensions client_cert					\
 		-extfile cert-extensions				\
 		-days 365						\
-		-out client.pem						\
+		-out cert.pem						\
 	|| die "Could not make a certificate"
 esac
 
