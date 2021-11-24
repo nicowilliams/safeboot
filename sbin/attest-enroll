@@ -12,6 +12,13 @@
 set -euo pipefail
 shopt -s extglob
 
+# Make a dup FD of stderr so we can cat any stderr we save to a temp file back
+# to stderr on exit.
+#
+# We use this to enable includion of a trace file in the enrolled assets as a
+# diagnostics feature.
+exec {stderr_dup}>&2
+
 PROG=${0##*/}
 BINDIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 TOP=$(dirname "$BINDIR")
@@ -50,6 +57,7 @@ EKPUB=/dev/stdin
 
 # Configuration variables
 DBDIR="$TOP/build/attest"
+DIAGNOSTICS=false
 POLICY=
 ESCROW_POLICY=
 ESCROW_PUBS_DIR=
@@ -63,6 +71,7 @@ POLICIES=()
 # For the configure function (see below)
 declare -A vars
 vars[DBDIR]=scalar
+vars[DIAGNOSTICS]=scalar
 vars[POLICY]=scalar
 vars[ESCROW_POLICY]=scalar
 vars[ESCROW_PUBS_DIR]=scalar
@@ -188,6 +197,54 @@ gentest1() {
 
 gentest2() {
 	echo "skip"
+}
+
+gendiagnostics() {
+	if [[ -f ${tmp}/trace ]]; then
+		cat "${tmp}/trace" > "${1}/diagnostics-trace"
+		echo "public diagnostics-trace"
+	else
+		echo "skip"
+	fi
+}
+
+tmp=
+success=false
+swtpm_pid=
+cleanup() {
+	if ((VERBOSE > 1)); then
+		(
+		[[ -n $outdir && -d $outdir ]] && sha256sum "${outdir}/"*
+		sha256sum "$tmp"/*
+		) | sort
+	fi
+
+	(
+		[[ -n $swtpm_pid ]]	\
+		&& kill -0 "$swtpm_pid"	\
+		&& kill "$swtpm_pid"
+	) 2>/dev/null			\
+	|| true
+	unset TPM2TOOLS_TCTI
+
+	if $debug; then
+		echo "LEAVING TEMP DIR ALONE: $tmp" 1>&2
+		exit 0;
+	fi
+	if ! $success; then
+		warn "Failed to enroll $hostname"
+		backtrace 1>&2
+	fi
+	exec 2>&${stderr_dup}
+	$trace && [[ -f ${tmp}/trace ]] && cat "${tmp}/trace" 1>&2
+	[[ -n $tmp ]] && rm -rf "$tmp";
+}
+tmp="$(mktemp -d)"
+trap cleanup EXIT
+
+diagnostics() {
+	set -vx
+	exec 2>"${tmp}/trace"
 }
 
 configure() {
@@ -350,6 +407,7 @@ EOF
 }
 
 add=false
+trace=false
 debug=false
 outdir=
 replace=false
@@ -363,6 +421,7 @@ C)	# Read given configuration
 		# Save the first given config so that genprogs can see it
 		export SAFEBOOT_ENROLL_CONF="$OPTARG"
 		configured=true
+		"$DIAGNOSTICS" && diagnostics
 	fi
 	CONF='';;
 I)	EKPUB=$OPTARG;;
@@ -370,6 +429,7 @@ V)	if ! $configured && [[ -f $SAFEBOOT_ENROLL_CONF ]]; then
 		# shellcheck disable=SC1090
 		. "$SAFEBOOT_ENROLL_CONF"
 		configured=true
+		"$DIAGNOSTICS" && diagnostics
 	fi
 	configure "$OPTARG";;
 a)	add=true;;
@@ -377,7 +437,7 @@ d)	debug=true;;
 h)	usage 0;;
 r)	replace=true;;
 v)	((VERBOSE++)) || true;;
-x)	set -vx;;
+x)	trace=true; set -vx;;
 *)	usage;;
 esac
 done
@@ -394,6 +454,7 @@ if [[ -n ${CONF:-} && -f ${CONF} ]]; then
 		. "${CONF}"
 		export SAFEBOOT_ENROLL_CONF="$CONF"
 		configured=true
+		"$DIAGNOSTICS" && diagnostics
 	fi
 fi
 [[ -z ${DBDIR:-} && ( -z ${CHECKOUT:-} || -z ${COMMIT:-} ) ]]	\
@@ -454,38 +515,6 @@ for policy_name in "${!POLICIES[@]}"; do
 		fi
 	fi
 done
-
-tmp=
-success=false
-swtpm_pid=
-cleanup() {
-	if ((VERBOSE > 1)); then
-		(
-		[[ -n $outdir && -d $outdir ]] && sha256sum "${outdir}/"*
-		sha256sum "$tmp"/*
-		) | sort
-	fi
-
-	(
-		[[ -n $swtpm_pid ]]	\
-		&& kill -0 "$swtpm_pid"	\
-		&& kill "$swtpm_pid"
-	) 2>/dev/null			\
-	|| true
-	unset TPM2TOOLS_TCTI
-
-	if $debug; then
-		echo "LEAVING TEMP DIR ALONE: $tmp" 1>&2
-		exit 0;
-	fi
-	[[ -n $tmp ]] && rm -rf "$tmp";
-	if ! $success; then
-		warn "Failed to enroll $hostname"
-		backtrace 1>&2
-	fi
-}
-tmp="$(mktemp -d)"
-trap cleanup EXIT
 
 # We might need a TPM for what should be software-only things...
 start_swtpm() {
@@ -799,7 +828,7 @@ if [[ -n $EKCERT ]]; then
 fi
 
 info "Generating secrets and metadata"
-for genprog in "${GENPROGS[@]}" genmanifest; do
+for genprog in "${GENPROGS[@]}" gendiagnostics genmanifest; do
 	info "Running GENPROG $genprog"
 
 	# We want to split the output of genprog on spaces:
